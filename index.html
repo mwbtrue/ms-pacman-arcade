@@ -37,6 +37,10 @@
             <div id="scoreDisplay" class="text-xl">0</div>
         </div>
         <div class="text-center">
+            <div class="text-pink-400 text-sm">LEVEL</div>
+            <div id="levelDisplay" class="text-xl">1</div>
+        </div>
+        <div class="text-right">
             <div class="text-pink-400 text-sm">HIGH SCORE</div>
             <div id="highScoreDisplay" class="text-xl">10000</div>
         </div>
@@ -47,7 +51,7 @@
         <canvas id="gameCanvas" width="456" height="456" class="rounded-lg border-2 border-pink-500/30"></canvas>
         
         <!-- Messages Overlay -->
-        <div id="messageOverlay" class="absolute inset-0 flex flex-col items-center justify-center bg-black/80 rounded-lg backdrop-blur-sm">
+        <div id="messageOverlay" class="absolute inset-0 flex flex-col items-center justify-center bg-black/80 rounded-lg backdrop-blur-sm transition-opacity duration-300">
             <h1 id="mainMessage" class="text-4xl text-yellow-300 arcade-font mb-4 text-center tracking-widest">READY!</h1>
             <p id="subMessage" class="text-pink-400 arcade-font animate-pulse">Press SPACE or Tap to Start</p>
         </div>
@@ -68,6 +72,7 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         const scoreDisplay = document.getElementById('scoreDisplay');
+        const levelDisplay = document.getElementById('levelDisplay');
         const messageOverlay = document.getElementById('messageOverlay');
         const mainMessage = document.getElementById('mainMessage');
         const subMessage = document.getElementById('subMessage');
@@ -79,6 +84,16 @@
         const ROWS = 19;
         const FPS = 60;
         const SPEED = 2; // Must be a divisor of TILE_SIZE
+
+        // Ms. Pac-Man classic alternating map colors
+        const LEVEL_COLORS = [
+            '#ffb8ae', // Pink
+            '#add8e6', // Light Blue
+            '#ffb852', // Orange
+            '#0000ff', // Dark Blue
+            '#ffb8ff', // Magenta
+            '#00ff00'  // Green
+        ];
 
         // 0: Path, 1: Wall, 2: Pellet, 3: Power Pellet, 4: Ghost Gate
         const INITIAL_MAP = [
@@ -106,7 +121,8 @@
         let map = [];
         let score = 0;
         let lives = 3;
-        let gameState = 'START'; // START, PLAYING, PAUSED, DEATH, GAME_OVER, WIN
+        let level = 1;
+        let gameState = 'START'; // START, PLAYING, PAUSED, DEATH, LEVEL_COMPLETE, GAME_OVER
         let pelletsRemaining = 0;
         let frightenedTimer = 0;
         let animationTime = 0;
@@ -197,6 +213,14 @@
                 gainNode.gain.linearRampToValueAtTime(0, now + 0.6);
                 osc.start(now);
                 osc.stop(now + 0.6);
+            } else if (type === 'levelClear') {
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(400, now);
+                osc.frequency.linearRampToValueAtTime(800, now + 0.5);
+                gainNode.gain.setValueAtTime(0.1, now);
+                gainNode.gain.linearRampToValueAtTime(0, now + 0.5);
+                osc.start(now);
+                osc.stop(now + 0.5);
             }
         }
 
@@ -513,6 +537,16 @@
 
         // --- GAME LOGIC ---
         function initGame() {
+            score = 0;
+            lives = 3;
+            level = 1;
+            scoreDisplay.innerText = score;
+            startLevel();
+            gameState = 'START';
+            showOverlay("MS. PAC-MAN", "Press SPACE or Tap to Start");
+        }
+
+        function startLevel() {
             map = INITIAL_MAP.map(row => [...row]); 
             pelletsRemaining = 0;
             
@@ -521,14 +555,10 @@
                     if (map[r][c] === 2 || map[r][c] === 3) pelletsRemaining++;
                 }
             }
-
-            score = 0;
-            lives = 3;
-            scoreDisplay.innerText = score;
+            
+            levelDisplay.innerText = level;
             updateLivesDisplay();
             resetEntities();
-            gameState = 'START';
-            showOverlay("MS. PAC-MAN", "Press SPACE or Tap to Start");
         }
 
         function resetEntities() {
@@ -580,7 +610,12 @@
                     score += 50;
                     pelletsRemaining--;
                     playSound('power');
-                    frightenedTimer = 400; 
+                    
+                    // Difficulty Scaling: Ghosts stay frightened for less time on higher levels
+                    // Base 400 frames, decreases by 40 frames per level, minimum 100 frames
+                    const maxFrightenedTime = Math.max(100, 400 - ((level - 1) * 40));
+                    frightenedTimer = maxFrightenedTime; 
+                    
                     ghosts.forEach(g => { 
                         if(g.mode !== 'EATEN') {
                             g.mode = 'FRIGHTENED';
@@ -590,9 +625,18 @@
                 }
                 scoreDisplay.innerText = score;
 
+                // Level clear logic
                 if (pelletsRemaining === 0) {
-                    gameState = 'WIN';
-                    showOverlay("YOU WIN!", "Press SPACE to Play Again");
+                    gameState = 'LEVEL_COMPLETE';
+                    level++;
+                    playSound('levelClear');
+                    showOverlay("LEVEL CLEARED!", "Starting next level...");
+                    
+                    setTimeout(() => {
+                        startLevel();
+                        gameState = 'PLAYING';
+                        hideOverlay();
+                    }, 2500);
                 }
             }
 
@@ -630,6 +674,9 @@
         function drawMap() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
+            // Loop through colors based on the current level
+            const wallColor = LEVEL_COLORS[(level - 1) % LEVEL_COLORS.length];
+            
             for (let r = 0; r < ROWS; r++) {
                 for (let c = 0; c < COLS; c++) {
                     const tile = getTile(c, r);
@@ -637,12 +684,12 @@
                     const y = r * TILE_SIZE;
 
                     if (tile === 1) {
-                        ctx.fillStyle = '#ffb8ae'; 
+                        ctx.fillStyle = wallColor; 
                         ctx.fillRect(x, y, TILE_SIZE, TILE_SIZE);
                         ctx.fillStyle = '#000';
                         ctx.fillRect(x + 2, y + 2, TILE_SIZE - 4, TILE_SIZE - 4);
                     } else if (tile === 4) {
-                        ctx.fillStyle = '#FFB8AE';
+                        ctx.fillStyle = wallColor;
                         ctx.fillRect(x, y + TILE_SIZE/2 - 2, TILE_SIZE, 4);
                     } else if (tile === 2) {
                         ctx.fillStyle = '#FFF';
@@ -663,7 +710,7 @@
 
         // --- MAIN LOOP ---
         function update() {
-            if (gameState === 'PAUSED') return;
+            if (gameState === 'PAUSED' || gameState === 'LEVEL_COMPLETE') return;
 
             animationTime++;
             if (frightenedTimer > 0) frightenedTimer--;
@@ -696,11 +743,13 @@
 
         // --- INPUT HANDLING ---
         function setDirection(dx, dy) {
-            if (gameState === 'START' || gameState === 'GAME_OVER' || gameState === 'WIN') {
+            if (gameState === 'LEVEL_COMPLETE') return; // Ignore input during transition
+            
+            if (gameState === 'START' || gameState === 'GAME_OVER') {
                 initAudio();
                 if (gameState === 'START') playSound('start');
                 
-                if(gameState === 'GAME_OVER' || gameState === 'WIN') initGame();
+                if(gameState === 'GAME_OVER') initGame();
                 gameState = 'PLAYING';
                 hideOverlay();
                 return;
